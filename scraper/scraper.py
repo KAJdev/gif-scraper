@@ -18,16 +18,16 @@ from dotenv import load_dotenv
 
 load_dotenv()  # take environment variables from .env.
 
-scroll_pause_time = 0.5 # You can set your own pause time. My laptop is a bit slow so I use 1 sec
-no_more_iterations = 5 # If the number of images we are getting is the same as the last time we checked, we stop the loop
-mal_pages = 1 # Number of pages to scrape from MyAnimeList
-mal_pages_skip = 0 # Number of pages to skip from MyAnimeList
-gifs_per_anime = 10 # Number of gifs to scrape per anime
-binary_fetch_workers = 5 # Number of workers to fetch binary data
-browser_workers = 25 # Number of workers to scrape gifs
-save_in_mongo = True # Whether to save the gifs in a mongo database
-binary_chunk_size = 261120 # Size of chunks to save binary data in
-anime_batch_size = 1 # Number of anime to scrape + save + fetch binary data + upload to mongo in one batch
+scroll_pause_time = int(getenv('SCROLL_PAUSE_TIME', 0.5)) # You can set your own pause time. My laptop is a bit slow so I use 1 sec
+no_more_iterations = int(getenv('NO_MORE_ITERATIONS', 5)) # Number of times to scroll down without finding new gifs before stopping
+mal_pages = int(getenv('MAL_PAGES', 1)) # Number of pages to scrape from MyAnimeList
+mal_pages_skip = int(getenv('MAL_PAGES_SKIP', 0)) # Number of pages to skip from MyAnimeList
+gifs_per_anime = int(getenv('GIFS_PER_ANIME', 10)) # Number of gifs to scrape per anime
+binary_fetch_workers = int(getenv('BINARY_FETCH_WORKERS', 5)) # Number of workers to fetch binary data for gifs
+browser_workers = int(getenv('BROWSER_WORKERS', 25)) # Number of workers to scrape gifs for anime
+save_in_mongo = getenv('SAVE_IN_MONGO', "true").lower() == "true" # Whether to save gifs in mongo
+binary_chunk_size = int(getenv('BINARY_CHUNK_SIZE', 261120)) # Size of binary data to save in mongo
+anime_batch_size = int(getenv('ANIME_BATCH_SIZE', 1)) # Number of anime to scrape per batch
 
 @dataclass(frozen=False, eq=True, order=True, repr=True, slots=True)
 class GIF:

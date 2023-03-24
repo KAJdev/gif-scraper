@@ -5,6 +5,9 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    env_file:
-      - .env
+    environment:
+      - MONGO_URI=<uri>
+      - MONGO_DB=animated_db
+      - MAL_PAGES=10
+      - GIFS_PER_ANIME=1000
     command: python3 scraper

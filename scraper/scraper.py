@@ -2,6 +2,7 @@ import asyncio
 import datetime
 import hashlib
 from os import getenv
+import os
 import random
 import aiohttp
 from dataclasses import dataclass
@@ -25,7 +26,6 @@ mal_pages_skip = int(getenv('MAL_PAGES_SKIP', 0)) # Number of pages to skip from
 gifs_per_anime = int(getenv('GIFS_PER_ANIME', 10)) # Number of gifs to scrape per anime
 binary_fetch_workers = int(getenv('BINARY_FETCH_WORKERS', 5)) # Number of workers to fetch binary data for gifs
 browser_workers = int(getenv('BROWSER_WORKERS', 25)) # Number of workers to scrape gifs for anime
-save_in_mongo = getenv('SAVE_IN_MONGO', "true").lower() == "true" # Whether to save gifs in mongo
 binary_chunk_size = int(getenv('BINARY_CHUNK_SIZE', 261120)) # Size of binary data to save in mongo
 anime_batch_size = int(getenv('ANIME_BATCH_SIZE', 1)) # Number of anime to scrape per batch
 
@@ -127,7 +127,7 @@ async def batch_workers(tasks, max_workers=10):
         results.extend(await asyncio.gather(*batch))
     return results
 
-async def fetch_gif_data(session, gif):
+async def fetch_gif_data(session, gif, chunks_col, files_col, meta_col):
     async with session.get(gif.href) as resp:
         if resp.status == 200:
             data = await resp.text()
@@ -144,7 +144,55 @@ async def fetch_gif_data(session, gif):
             else:
                 tqdm.write(f"    no src for {gif.href}")
 
-            return gif
+            if gif.data:
+                meta = {
+                    "image_name": gif.src.split("/")[-1],
+                    "meta": {
+                        "tenor_tags": gif.tags,
+                        "view_url": gif.href,
+                        "src": gif.src,
+                        "search_term": gif.search_term,
+                        "page": gif.page,
+                        "index": gif.index,
+                    },
+                    "ext": "gif",
+                    "source": "tenor",
+                    "md5": hashlib.md5(gif.data).hexdigest(),
+                }
+
+                file = {
+                    "chunkSize": binary_chunk_size,
+                    "length": len(gif.data),
+                    "uploadDate": datetime.datetime.utcnow(),
+                }
+
+                file_id = await files_col.update_one(
+                    {"md5": meta["md5"]},
+                    {"$setOnInsert": file},
+                    upsert=True,
+                )
+
+                if file_id.upserted_id is None:
+                    tqdm.write(f"    skipping duplicate {meta['md5']}")
+                    del gif.data
+                    gif.data = None
+                    return
+
+                chunks = []
+                for i in range(0, len(gif.data), binary_chunk_size):
+                    chunks.append({
+                        "data": gif.data[i:i+binary_chunk_size],
+                        "n": i//binary_chunk_size,
+                        "files_id": file_id.upserted_id,
+                    })
+                await chunks_col.insert_many(chunks)
+
+                meta["_id"] = file_id.upserted_id
+                await meta_col.insert_one(meta)
+
+                # free up memory
+                del gif.data
+                gif.data = None
 
 async def run_workers():
     log_imp(f"fetching top anime")
@@ -155,7 +203,7 @@ async def run_workers():
         top_anime = all_anime[anime_batch:anime_batch+anime_batch_size]
 
         log_imp(f"launching browser")
-        browser = await launch(headless=True, args=['--no-sandbox', '--disable-setuid-sandbox'], executablePath='/usr/bin/google-chrome-stable')
+        browser = await launch(headless=True, args=['--no-sandbox', '--disable-setuid-sandbox'], executablePath='/usr/bin/google-chrome-stable' if os.name == 'posix' else None)
         log(f"browser launched")
 
         log_imp(f"scraping gifs")
@@ -179,10 +227,17 @@ async def run_workers():
 
         log_imp(f"fetching gif metadata & saving binary data")
 
+        client = motor.motor_asyncio.AsyncIOMotorClient(getenv("MONGO_URI"), io_loop=asyncio.get_event_loop())
+        db = client[getenv("MONGO_DB", 'animated_db_test')]
+
+        chunks_col = db['animated_files.chunks']
+        files_col = db['animated_files.files']
+        meta_col = db['animated_meta']
+
         async with aiohttp.ClientSession() as session:
             with tqdm(total=len(gifs)) as pbar:
                 # run in batches
-                tasks = [fetch_gif_data(session, gif) for gif in gifs]
+                tasks = [fetch_gif_data(session, gif, chunks_col, files_col, meta_col) for gif in gifs]
                 i = 0
 
                 current_batch = tasks[:binary_fetch_workers]
@@ -202,69 +257,13 @@ async def run_workers():
                         current_batch.extend(tasks[:can_fill])
                         tasks = tasks[can_fill:]
 
-        log(f"got {len(gifs)} gifs with metadata")
-
-        if not save_in_mongo:
-            jsonified = [gif.to_dict() for gif in gifs if gif.data]
-            log_imp(f"writing {len(jsonified)} gifs to file")
-            with open("gifs.txt", "w") as f:
-                json_iter = json.JSONEncoder().iterencode(jsonified)
-                for chunk in tqdm(json_iter, total=len(jsonified)):
-                    f.write(chunk)
-        else:
-            log_imp(f"uploading {len(gifs)} gifs to mongo")
-
-            client = motor.motor_asyncio.AsyncIOMotorClient(getenv("MONGO_URI"), io_loop=asyncio.get_event_loop())
-            db = client['animated_db_test']
-
-            chunks_col = db['animated_files.chunks']
-            files_col = db['animated_files.files']
-            meta_col = db['animated_meta']
-
-            for gif in tqdm(gifs):
-                if gif.data:
-                    meta = {
-                        "image_name": gif.src.split("/")[-1],
-                        "meta": {
-                            "tenor_tags": gif.tags,
-                            "view_url": gif.href,
-                            "src": gif.src,
-                            "search_term": gif.search_term,
-                            "page": gif.page,
-                            "index": gif.index,
-                        },
-                        "ext": "gif",
-                        "source": "tenor",
-                        "md5": hashlib.md5(gif.data).hexdigest(),
-                    }
-
-                    file = {
-                        "chunkSize": binary_chunk_size,
-                        "length": len(gif.data),
-                        "uploadDate": datetime.datetime.utcnow(),
-                    }
-
-                    file_id = await files_col.update_one(
-                        {"md5": meta["md5"]},
-                        {"$setOnInsert": file},
-                        upsert=True,
-                    )
-
-                    if file_id.upserted_id is None:
-                        tqdm.write(f"    skipping duplicate {meta['md5']}")
-                        continue
-
-                    chunks = []
-                    for i in range(0, len(gif.data), binary_chunk_size):
-                        chunks.append({
-                            "data": gif.data[i:i+binary_chunk_size],
-                            "n": i//binary_chunk_size,
-                            "files_id": file_id.upserted_id,
-                        })
-                    await chunks_col.insert_many(chunks)
-
-                    meta["_id"] = file_id.upserted_id
-                    await meta_col.insert_one(meta)
+        # old way of saving to file (for testing)
+        # jsonified = [gif.to_dict() for gif in gifs if gif.data]
+        # log_imp(f"writing {len(jsonified)} gifs to file")
+        # with open("gifs.txt", "w") as f:
+        #     json_iter = json.JSONEncoder().iterencode(jsonified)
+        #     for chunk in tqdm(json_iter, total=len(jsonified)):
+        #         f.write(chunk)
 
         log_imp(f"done with batch {anime_batch} to {len(all_anime)}")
 

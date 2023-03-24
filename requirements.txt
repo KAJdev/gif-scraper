@@ -1,0 +1,8 @@
+asyncio
+aiohttp
+beautifulsoup4
+tqdm
+pyppeteer
+pymongo
+motor
+python-dotenv

@@ -5,8 +5,6 @@ RUN pip install --upgrade pip
 ADD requirements.txt /requirements.txt
 RUN pip install -r requirements.txt
 
-ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD true
-
 # Install Google Chrome Stable and fonts
 # Note: this installs the necessary libs to make the browser work with Puppeteer.
 RUN apt-get update && apt-get install gnupg wget -y && \
@@ -16,8 +14,8 @@ RUN apt-get update && apt-get install gnupg wget -y && \
   apt-get install google-chrome-stable -y --no-install-recommends && \
   rm -rf /var/lib/apt/lists/*
 
-# RUN apt-get install libxtst6 -y
-# RUN apt-get install libatk-bridge2.0-0 -y
+ADD chrome_downloader.py /chrome_downloader.py
+RUN python3 /chrome_downloader.py
 
 # Copy source code
 ADD . /

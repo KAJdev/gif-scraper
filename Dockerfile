@@ -14,12 +14,18 @@ RUN apt-get update && apt-get install gnupg wget -y && \
   apt-get install google-chrome-stable -y --no-install-recommends && \
   rm -rf /var/lib/apt/lists/*
 
-ADD chrome_downloader.py /chrome_downloader.py
-RUN python3 /chrome_downloader.py
+# setup non-root user for chrome
+RUN groupadd -r pptruser && useradd -r -g pptruser -G audio,video pptruser \
+  && mkdir -p /home/pptruser/Downloads \
+  && chown -R pptruser:pptruser /home/pptruser
 
-# Copy source code
-ADD . /
-WORKDIR /
+# set working directory to user home
+WORKDIR /home/pptruser
+
+# add source code and run as non-root user
+ADD . /home/pptruser/
+RUN chown -R pptruser:pptruser /home/pptruser
+USER pptruser
 
 # Run the app
 CMD ["python3", "scraper"]

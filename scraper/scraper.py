@@ -21,9 +21,9 @@ load_dotenv()  # take environment variables from .env.
 
 scroll_pause_time = int(getenv('SCROLL_PAUSE_TIME', 0.5)) # You can set your own pause time. My laptop is a bit slow so I use 1 sec
 no_more_iterations = int(getenv('NO_MORE_ITERATIONS', 5)) # Number of times to scroll down without finding new gifs before stopping
-mal_pages = int(getenv('MAL_PAGES', 1)) # Number of pages to scrape from MyAnimeList
+mal_pages = int(getenv('MAL_PAGES', 10)) # Number of pages to scrape from MyAnimeList
 mal_pages_skip = int(getenv('MAL_PAGES_SKIP', 0)) # Number of pages to skip from MyAnimeList
-gifs_per_anime = int(getenv('GIFS_PER_ANIME', 10)) # Number of gifs to scrape per anime
+gifs_per_anime = int(getenv('GIFS_PER_ANIME', 1500)) # Number of gifs to scrape per anime
 binary_fetch_workers = int(getenv('BINARY_FETCH_WORKERS', 5)) # Number of workers to fetch binary data for gifs
 browser_workers = int(getenv('BROWSER_WORKERS', 25)) # Number of workers to scrape gifs for anime
 binary_chunk_size = int(getenv('BINARY_CHUNK_SIZE', 261120)) # Size of binary data to save in mongo
@@ -111,7 +111,7 @@ async def get_top_mal_animes(pages=1):
     top = []
     async with aiohttp.ClientSession() as session:
         for page in range(1, pages+1):
-            async with session.get("https://api.jikan.moe/v4/top/anime?filter=bypopularity?page={}".format(page + mal_pages_skip)) as resp:
+            async with session.get("https://api.jikan.moe/v4/top/anime?filter=bypopularity&page={}".format(page + mal_pages_skip)) as resp:
                 if resp.status == 200:
                     data = await resp.json()
                     for anime in data["data"]:
@@ -173,10 +173,9 @@ async def fetch_gif_data(session, gif, chunks_col, files_col, meta_col):
                 )
 
                 if file_id.upserted_id is None:
-                    tqdm.write(f"    skipping duplicate {meta['md5']}")
                     del gif.data
                     gif.data = None
-                    return
+                    return False
 
                 chunks = []
                 for i in range(0, len(gif.data), binary_chunk_size):
@@ -193,11 +192,17 @@ async def fetch_gif_data(session, gif, chunks_col, files_col, meta_col):
                 # free up memory
                 del gif.data
                 gif.data = None
+                return True
+
+    return False
 
 async def run_workers():
     log_imp(f"fetching top anime")
     all_anime = await get_top_mal_animes(mal_pages)
     log_imp(f"fetched top anime:", all_anime)
+
+    fetched_total = 0
+    uploaded_total = 0
 
     for anime_batch in range(0, len(all_anime), anime_batch_size):
         top_anime = all_anime[anime_batch:anime_batch+anime_batch_size]
@@ -228,7 +233,7 @@ async def run_workers():
         log_imp(f"fetching gif metadata & saving binary data")
 
         client = motor.motor_asyncio.AsyncIOMotorClient(getenv("MONGO_URI"), io_loop=asyncio.get_event_loop())
-        db = client[getenv("MONGO_DB", 'animated_db_test')]
+        db = client[getenv("MONGO_DB", 'animated_db')]
 
         chunks_col = db['animated_files.chunks']
         files_col = db['animated_files.files']
@@ -251,6 +256,12 @@ async def run_workers():
                     done, unfinished = await asyncio.wait(current_batch, return_when=asyncio.FIRST_COMPLETED)
                     pbar.update(len(done))
                     i += len(done)
+                    fetched_total += len(done)
+
+                    for task in done:
+                        if task.result():
+                            uploaded_total += 1
+
                     current_batch = list(unfinished)
                     can_fill = binary_fetch_workers - len(current_batch)
                     if can_fill > 0:
@@ -265,7 +276,7 @@ async def run_workers():
         #     for chunk in tqdm(json_iter, total=len(jsonified)):
         #         f.write(chunk)
 
-        log_imp(f"done with batch {anime_batch} to {len(all_anime)}")
+        log_imp(f"batch {anime_batch+1} of {len(all_anime)}\n    fetched: {fetched_total} total\n    uploaded: {uploaded_total} total ({uploaded_total/len(all_anime):.2%} of anime)")
 
 def main():
     asyncio.run(run_workers())

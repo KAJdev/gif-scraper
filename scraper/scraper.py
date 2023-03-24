@@ -155,7 +155,7 @@ async def run_workers():
         top_anime = all_anime[anime_batch:anime_batch+anime_batch_size]
 
         log_imp(f"launching browser")
-        browser = await launch(headless=True, args=['--no-sandbox', '--disable-setuid-sandbox'])
+        browser = await launch(headless=True, args=['--no-sandbox', '--disable-setuid-sandbox'], executablePath='/usr/bin/google-chrome-stable')
         log(f"browser launched")
 
         log_imp(f"scraping gifs")

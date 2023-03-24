@@ -2,7 +2,7 @@ import asyncio
 
 async def main():
     from pyppeteer import launch
-    browser = launch(executablePath='/usr/bin/google-chrome-stable')
+    browser = await launch(executablePath='/usr/bin/google-chrome-stable')
     page = await browser.newPage()
 
 if __name__ == "__main__":

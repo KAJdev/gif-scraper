@@ -16,8 +16,8 @@ RUN apt-get update && apt-get install gnupg wget -y && \
   apt-get install google-chrome-stable -y --no-install-recommends && \
   rm -rf /var/lib/apt/lists/*
 
-RUN apt-get install libxtst6 -y
-RUN apt-get install libatk-bridge2.0-0 -y
+# RUN apt-get install libxtst6 -y
+# RUN apt-get install libatk-bridge2.0-0 -y
 
 # Copy source code
 ADD . /

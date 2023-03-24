@@ -1,0 +1,10 @@
+services:
+  scraper:
+    container_name: scraper
+    image: scraper
+    build:
+      context: .
+      dockerfile: Dockerfile
+    env_file:
+      - .env
+    command: python3 scraper

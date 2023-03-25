@@ -322,7 +322,7 @@ async def run_workers():
         #     for chunk in tqdm(json_iter, total=len(jsonified)):
         #         f.write(chunk)
 
-        log_imp(f"batch {anime_batch+1} of {len(all_terms)}\n    fetched: {fetched_total} total\n    uploaded: {uploaded_total} total ({uploaded_total+1/fetched_total+1:.2%} success rate)")
+        log_imp(f"\n\nbatch {anime_batch+1} of {len(all_terms)}\n    fetched: {fetched_total} total\n    uploaded: {uploaded_total} total ({uploaded_total+1/fetched_total+1:.2%} success rate)")
 
 def main():
     asyncio.run(run_workers())

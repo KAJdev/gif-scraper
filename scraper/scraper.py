@@ -1,6 +1,7 @@
 import asyncio
 import datetime
 import hashlib
+import io
 from os import getenv
 import os
 import random
@@ -14,7 +15,9 @@ from tqdm import tqdm
 import json
 import base64
 import motor.motor_asyncio
-
+import asyncio
+import aioboto3
+import botocore
 from dotenv import load_dotenv
 
 load_dotenv()  # take environment variables from .env.
@@ -23,7 +26,7 @@ scroll_pause_time = int(getenv('SCROLL_PAUSE_TIME', 0.5)) # You can set your own
 no_more_iterations = int(getenv('NO_MORE_ITERATIONS', 5)) # Number of times to scroll down without finding new gifs before stopping
 mal_pages = int(getenv('MAL_PAGES', 10)) # Number of pages to scrape from MyAnimeList
 mal_pages_skip = int(getenv('MAL_PAGES_SKIP', 0)) # Number of pages to skip from MyAnimeList
-gifs_per_anime = int(getenv('GIFS_PER_ANIME', 1500)) # Number of gifs to scrape per anime
+gifs_per_anime = int(getenv('GIFS_PER_ANIME', 1000)) # Number of gifs to scrape per anime
 binary_fetch_workers = int(getenv('BINARY_FETCH_WORKERS', 5)) # Number of workers to fetch binary data for gifs
 browser_workers = int(getenv('BROWSER_WORKERS', 25)) # Number of workers to scrape gifs for anime
 binary_chunk_size = int(getenv('BINARY_CHUNK_SIZE', 261120)) # Size of binary data to save in mongo
@@ -132,7 +135,7 @@ async def batch_workers(tasks, max_workers=10):
         results.extend(await asyncio.gather(*batch))
     return results
 
-async def fetch_gif_data(session, gif, chunks_col, files_col, meta_col):
+async def fetch_gif_data(session, gif, s3, meta_col):
     async with session.get(gif.href) as resp:
         if resp.status == 200:
             data = await resp.text()
@@ -150,6 +153,9 @@ async def fetch_gif_data(session, gif, chunks_col, files_col, meta_col):
                 tqdm.write(f"    no src for {gif.href}")
 
             if gif.data:
+
+                s3_key = f"{gif.search_term}/{gif.page}/{gif.index}/{gif.src.split('/')[-1]}"
+
                 meta = {
                     "image_name": gif.src.split("/")[-1],
                     "meta": {
@@ -163,35 +169,21 @@ async def fetch_gif_data(session, gif, chunks_col, files_col, meta_col):
                     "ext": "gif",
                     "source": "tenor",
                     "md5": hashlib.md5(gif.data).hexdigest(),
+                    "file_s3_url": None,
+                    "latent_s3_url": None,
                 }
 
-                file = {
-                    "chunkSize": binary_chunk_size,
-                    "length": len(gif.data),
-                    "uploadDate": datetime.datetime.utcnow(),
-                }
-
-                file_id = await files_col.update_one(
-                    {"md5": meta["md5"]},
-                    {"$setOnInsert": file},
-                    upsert=True,
-                )
-
-                if file_id.upserted_id is None:
+                # check if md5 already exists
+                if await meta_col.find_one({"md5": meta["md5"]}):
                     del gif.data
                     gif.data = None
                     return False
 
-                chunks = []
-                for i in range(0, len(gif.data), binary_chunk_size):
-                    chunks.append({
-                        "data": gif.data[i:i+binary_chunk_size],
-                        "n": i//binary_chunk_size,
-                        "files_id": file_id.upserted_id,
-                    })
-                await chunks_col.insert_many(chunks)
+                # upload to s3
+                await s3.upload_fileobj(io.BytesIO(gif.data), getenv("SPACES_BUCKET"), s3_key, ExtraArgs={"ACL": "public-read", "ContentType": "image/gif"})
 
-                meta["_id"] = file_id.upserted_id
+                meta["file_s3_url"] = f"https://{getenv('SPACES_BUCKET')}.sfo3.cdn.digitaloceanspaces.com/{s3_key}"
+                # upload to db
                 await meta_col.insert_one(meta)
 
                 # free up memory
@@ -238,40 +230,43 @@ async def run_workers():
         log_imp(f"fetching gif metadata & saving binary data")
 
         client = motor.motor_asyncio.AsyncIOMotorClient(getenv("MONGO_URI"), io_loop=asyncio.get_event_loop())
-        db = client[getenv("MONGO_DB", 'animated_db')]
-
-        chunks_col = db['animated_files.chunks']
-        files_col = db['animated_files.files']
+        db = client[getenv("MONGO_DB", 'animated_db_s3')]
         meta_col = db['animated_meta']
+        s3_session = aioboto3.Session(
+            aws_access_key_id=getenv("SPACES_KEY"),
+            aws_secret_access_key=getenv("SPACES_SECRET"),
+            region_name='sfo3'
+        )
 
-        async with aiohttp.ClientSession() as session:
-            with tqdm(total=len(gifs)) as pbar:
-                # run in batches
-                tasks = [fetch_gif_data(session, gif, chunks_col, files_col, meta_col) for gif in gifs]
-                i = 0
+        async with s3_session.client('s3', endpoint_url=getenv("SPACES_ENDPOINT"), config=botocore.config.Config(s3={'addressing_style': 'virtual'})) as s3:
+            async with aiohttp.ClientSession() as session:
+                with tqdm(total=len(gifs)) as pbar:
+                    # run in batches
+                    tasks = [fetch_gif_data(session, gif, s3, meta_col) for gif in gifs]
+                    i = 0
 
-                current_batch = tasks[:binary_fetch_workers]
-                tasks = tasks[binary_fetch_workers:]
+                    current_batch = tasks[:binary_fetch_workers]
+                    tasks = tasks[binary_fetch_workers:]
 
-                while tasks or current_batch:
-                    if tasks and not current_batch:
-                        current_batch = tasks
-                        tasks = []
+                    while tasks or current_batch:
+                        if tasks and not current_batch:
+                            current_batch = tasks
+                            tasks = []
 
-                    done, unfinished = await asyncio.wait(current_batch, return_when=asyncio.FIRST_COMPLETED)
-                    pbar.update(len(done))
-                    i += len(done)
-                    fetched_total += len(done)
+                        done, unfinished = await asyncio.wait(current_batch, return_when=asyncio.FIRST_COMPLETED)
+                        pbar.update(len(done))
+                        i += len(done)
+                        fetched_total += len(done)
 
-                    for task in done:
-                        if task.result():
-                            uploaded_total += 1
+                        for task in done:
+                            if task.result():
+                                uploaded_total += 1
 
-                    current_batch = list(unfinished)
-                    can_fill = binary_fetch_workers - len(current_batch)
-                    if can_fill > 0:
-                        current_batch.extend(tasks[:can_fill])
-                        tasks = tasks[can_fill:]
+                        current_batch = list(unfinished)
+                        can_fill = binary_fetch_workers - len(current_batch)
+                        if can_fill > 0:
+                            current_batch.extend(tasks[:can_fill])
+                            tasks = tasks[can_fill:]
 
         # old way of saving to file (for testing)
         # jsonified = [gif.to_dict() for gif in gifs if gif.data]

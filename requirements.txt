@@ -6,3 +6,4 @@ pyppeteer
 pymongo
 motor
 python-dotenv
+aioboto3

@@ -33,4 +33,4 @@ RUN chown -R pptruser:pptruser /home/pptruser
 USER pptruser
 
 # Run the app
-CMD ["python3", "scraper"]
+CMD ["python3", "scraper", "alphacoders"]

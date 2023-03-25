@@ -124,7 +124,7 @@ async def get_top_mal_animes(pages=1):
                 if resp.status == 200:
                     data = await resp.json()
                     for anime in data["data"]:
-                        top.append(anime["title"])                    
+                        top.append(anime["title"])
 
     return top
 
@@ -140,7 +140,7 @@ async def get_top_mal_characters(pages=1):
                 if resp.status == 200:
                     data = await resp.json()
                     for character in data["data"]:
-                        top.append(character["name"])                  
+                        top.append(character["name"])
 
     return top
 
@@ -174,7 +174,7 @@ async def fetch_gif_data(session, gif, s3, meta_col):
                 s3_key = f"{gif.search_term.replace('/', '-')}/{gif.page}/{gif.index}/{gif.src.split('/')[-1]}"
 
                 # urlencode the key
-                s3_key = urllib.parse.quote(s3_key)
+                # s3_key = urllib.parse.quote(s3_key)
 
                 meta = {
                     "image_name": gif.src.split("/")[-1],

@@ -43,6 +43,11 @@ class GIF:
     def __hash__(self) -> int:
         return hash(self.src)
     
+    def __eq__(self, o: object) -> bool:
+        if isinstance(o, GIF):
+            return self.src == o.src
+        return False
+    
     def to_dict(self):
         return {
             "src": self.src,

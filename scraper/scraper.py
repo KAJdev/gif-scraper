@@ -117,9 +117,10 @@ async def scrape_search_gifs(browser, search_term, num_gifs):
 
 async def get_top_mal_animes(pages=1):
     top = []
+    skip = random.randint(0, 100)
     async with aiohttp.ClientSession() as session:
         for page in range(1, pages+1):
-            async with session.get("https://api.jikan.moe/v4/top/anime?filter=bypopularity&page={}".format(page + mal_pages_skip)) as resp:
+            async with session.get("https://api.jikan.moe/v4/top/anime?filter=bypopularity&page={}".format(page + skip)) as resp:
                 if resp.status == 200:
                     data = await resp.json()
                     for anime in data["data"]:

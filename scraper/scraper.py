@@ -27,7 +27,7 @@ no_more_iterations = int(getenv('NO_MORE_ITERATIONS', 5)) # Number of times to s
 mal_pages = int(getenv('MAL_PAGES', 10)) # Number of pages to scrape from MyAnimeList
 mal_pages_skip = int(getenv('MAL_PAGES_SKIP', 0)) # Number of pages to skip from MyAnimeList
 gifs_per_anime = int(getenv('GIFS_PER_ANIME', 1000)) # Number of gifs to scrape per anime
-binary_fetch_workers = int(getenv('BINARY_FETCH_WORKERS', 5)) # Number of workers to fetch binary data for gifs
+binary_fetch_workers = int(getenv('BINARY_FETCH_WORKERS', 7)) # Number of workers to fetch binary data for gifs
 browser_workers = int(getenv('BROWSER_WORKERS', 25)) # Number of workers to scrape gifs for anime
 binary_chunk_size = int(getenv('BINARY_CHUNK_SIZE', 261120)) # Size of binary data to save in mongo
 anime_batch_size = int(getenv('ANIME_BATCH_SIZE', 1)) # Number of anime to scrape per batch
@@ -117,14 +117,14 @@ async def scrape_search_gifs(browser, search_term, num_gifs):
 
 async def get_top_mal_animes(pages=1):
     top = []
-    skip = random.randint(0, 900)
+    skip = 0#random.randint(0, 900)
     async with aiohttp.ClientSession() as session:
         for page in range(1, pages+1):
             async with session.get("https://api.jikan.moe/v4/top/anime?filter=bypopularity&page={}".format(page + skip)) as resp:
                 if resp.status == 200:
                     data = await resp.json()
                     for anime in data["data"]:
-                        top.append(anime["title"])
+                        top.append(anime["title"] + " anime")
 
     return top
 
@@ -133,14 +133,14 @@ async def get_top_mal_characters(pages=1):
     returns character names
     """
     top = []
-    skip = random.randint(0, 1000)
+    skip = 0#random.randint(0, 1000)
     async with aiohttp.ClientSession() as session:
         for page in range(1, pages+1):
             async with session.get("https://api.jikan.moe/v4/top/characters?filter=bypopularity&page={}".format(page + skip)) as resp:
                 if resp.status == 200:
                     data = await resp.json()
                     for character in data["data"]:
-                        top.append(character["name"])
+                        top.append(character["name"] + " anime")
 
     return top
 
@@ -171,7 +171,7 @@ async def fetch_gif_data(session, gif, s3, meta_col):
 
             if gif.data:
 
-                s3_key = f"{gif.search_term.replace('/', '-')}/{gif.page}/{gif.index}/{gif.src.split('/')[-1]}"
+                s3_key = f"{gif.search_term.replace('/', '-')}/{gif.index}--{gif.src.split('/')[-1]}"
 
                 # urlencode the key
                 # s3_key = urllib.parse.quote(s3_key)
@@ -214,6 +214,10 @@ async def fetch_gif_data(session, gif, s3, meta_col):
     return False
 
 async def run_workers():
+    client = motor.motor_asyncio.AsyncIOMotorClient(getenv("MONGO_URI"), io_loop=asyncio.get_event_loop())
+    db = client[getenv("MONGO_DB", 'animated_db_s3')]
+    meta_col = db['animated_meta']
+
     log_imp(f"fetching top anime and characters")
     all_terms = await get_top_mal_animes(mal_pages)
     log(f"fetched top anime:", all_terms)
@@ -229,6 +233,26 @@ async def run_workers():
     for anime_batch in range(0, len(all_terms), anime_batch_size):
         top_anime = all_terms[anime_batch:anime_batch+anime_batch_size]
 
+        log_imp(f"fetching already fetched terms")
+        before = len(top_anime)
+
+        already_fetched_terms = await meta_col.aggregate([
+            {"$group": {"_id": "$meta.search_term"}},
+            {"$match": {"_id": {"$in": all_terms}}},
+        ]).to_list(None)
+
+        # flatten pipeline results to list
+        already_fetched_terms = [term["_id"] for term in already_fetched_terms]
+
+        # remove already fetched terms
+        top_anime = [term for term in top_anime if term not in already_fetched_terms]
+
+        log(f"removed {before - len(top_anime)} already fetched terms")
+
+        if not top_anime:
+            log("no anime to scrape")
+            continue
+
         log_imp(f"launching browser")
         browser = await launch(headless=True, args=['--no-sandbox', '--disable-setuid-sandbox'], executablePath='/usr/bin/google-chrome-stable' if os.name == 'posix' else None)
         log(f"browser launched")
@@ -236,7 +260,7 @@ async def run_workers():
         log_imp(f"scraping gifs")
         tasks = []
         for term in top_anime:
-            tasks.append(scrape_search_gifs(browser, term + " anime", gifs_per_anime))
+            tasks.append(scrape_search_gifs(browser, term, gifs_per_anime))
         log(f"created {len(tasks)} tasks")
 
         try:
@@ -254,9 +278,6 @@ async def run_workers():
 
         log_imp(f"fetching gif metadata & saving binary data")
 
-        client = motor.motor_asyncio.AsyncIOMotorClient(getenv("MONGO_URI"), io_loop=asyncio.get_event_loop())
-        db = client[getenv("MONGO_DB", 'animated_db_s3')]
-        meta_col = db['animated_meta']
         s3_session = aioboto3.Session(
             aws_access_key_id=getenv("SPACES_KEY"),
             aws_secret_access_key=getenv("SPACES_SECRET"),
@@ -301,7 +322,7 @@ async def run_workers():
         #     for chunk in tqdm(json_iter, total=len(jsonified)):
         #         f.write(chunk)
 
-        log_imp(f"batch {anime_batch+1} of {len(all_terms)}\n    fetched: {fetched_total} total\n    uploaded: {uploaded_total} total ({uploaded_total/len(all_terms):.2%} of anime)")
+        log_imp(f"batch {anime_batch+1} of {len(all_terms)}\n    fetched: {fetched_total} total\n    uploaded: {uploaded_total} total ({uploaded_total+1/fetched_total+1:.2%} success rate)")
 
 def main():
     asyncio.run(run_workers())

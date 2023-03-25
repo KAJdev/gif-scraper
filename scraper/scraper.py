@@ -7,7 +7,7 @@ import os
 import random
 import aiohttp
 from dataclasses import dataclass
-from pymongo import ReturnDocument
+import urllib
 
 from pyppeteer import launch
 import bs4
@@ -128,6 +128,22 @@ async def get_top_mal_animes(pages=1):
 
     return top
 
+async def get_top_mal_characters(pages=1):
+    """
+    returns character names
+    """
+    top = []
+    skip = random.randint(0, 1000)
+    async with aiohttp.ClientSession() as session:
+        for page in range(1, pages+1):
+            async with session.get("https://api.jikan.moe/v4/top/characters?filter=bypopularity&page={}".format(page + skip)) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    for character in data["data"]:
+                        top.append(character["name"])                  
+
+    return top
+
 async def batch_workers(tasks, max_workers=10):
     results = []
     for i in range(0, len(tasks), max_workers):
@@ -155,7 +171,10 @@ async def fetch_gif_data(session, gif, s3, meta_col):
 
             if gif.data:
 
-                s3_key = f"{gif.search_term}/{gif.page}/{gif.index}/{gif.src.split('/')[-1]}"
+                s3_key = f"{gif.search_term.replace('/', '-')}/{gif.page}/{gif.index}/{gif.src.split('/')[-1]}"
+
+                # urlencode the key
+                s3_key = urllib.parse.quote(s3_key)
 
                 meta = {
                     "image_name": gif.src.split("/")[-1],
@@ -195,15 +214,20 @@ async def fetch_gif_data(session, gif, s3, meta_col):
     return False
 
 async def run_workers():
-    log_imp(f"fetching top anime")
-    all_anime = await get_top_mal_animes(mal_pages)
-    log_imp(f"fetched top anime:", all_anime)
+    log_imp(f"fetching top anime and characters")
+    all_terms = await get_top_mal_animes(mal_pages)
+    log(f"fetched top anime:", all_terms)
+    all_terms.extend(await get_top_mal_characters(mal_pages))
+    log(f"fetched top anime and characters:", all_terms)
+
+    # shuffle
+    random.shuffle(all_terms)
 
     fetched_total = 0
     uploaded_total = 0
 
-    for anime_batch in range(0, len(all_anime), anime_batch_size):
-        top_anime = all_anime[anime_batch:anime_batch+anime_batch_size]
+    for anime_batch in range(0, len(all_terms), anime_batch_size):
+        top_anime = all_terms[anime_batch:anime_batch+anime_batch_size]
 
         log_imp(f"launching browser")
         browser = await launch(headless=True, args=['--no-sandbox', '--disable-setuid-sandbox'], executablePath='/usr/bin/google-chrome-stable' if os.name == 'posix' else None)
@@ -277,7 +301,7 @@ async def run_workers():
         #     for chunk in tqdm(json_iter, total=len(jsonified)):
         #         f.write(chunk)
 
-        log_imp(f"batch {anime_batch+1} of {len(all_anime)}\n    fetched: {fetched_total} total\n    uploaded: {uploaded_total} total ({uploaded_total/len(all_anime):.2%} of anime)")
+        log_imp(f"batch {anime_batch+1} of {len(all_terms)}\n    fetched: {fetched_total} total\n    uploaded: {uploaded_total} total ({uploaded_total/len(all_terms):.2%} of anime)")
 
 def main():
     asyncio.run(run_workers())

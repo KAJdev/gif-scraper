@@ -117,7 +117,7 @@ async def scrape_search_gifs(browser, search_term, num_gifs):
 
 async def get_top_mal_animes(pages=1):
     top = []
-    skip = 0#random.randint(0, 900)
+    skip = random.randint(0, 900)
     async with aiohttp.ClientSession() as session:
         for page in range(1, pages+1):
             async with session.get("https://api.jikan.moe/v4/top/anime?filter=bypopularity&page={}".format(page + skip)) as resp:
@@ -133,7 +133,7 @@ async def get_top_mal_characters(pages=1):
     returns character names
     """
     top = []
-    skip = 0#random.randint(0, 1000)
+    skip = random.randint(0, 1000)
     async with aiohttp.ClientSession() as session:
         for page in range(1, pages+1):
             async with session.get("https://api.jikan.moe/v4/top/characters?filter=bypopularity&page={}".format(page + skip)) as resp:
